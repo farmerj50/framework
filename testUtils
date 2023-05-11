@@ -1,0 +1,827 @@
+var fs = require('fs');
+//require('custom-env').env(global.environment);
+var path = require('path');
+var Framework = require('../API_Test_Framework/controller.js');
+const addContext = require('mochawesome/addContext');
+var expect = require('chai').expect;
+const { Spanner } = require('@google-cloud/spanner');
+const InvalidErrorResponse = require('../CustomException/InvalidErrorResponse.js');
+var eventEmitter = Framework.eventEmitter;      // For QTest integration part
+var root_url_fetchActionDB = "https://apis-qa.globalpay.com/apis/auditdata/actions/";
+var softAssert = require('./ActionsUtilities/softAssert');
+var equal = require('deep-equal');
+
+var header_fetchTran = {
+  "apikey": "aTdbwbSDNWfAgtCLBqG020aewWLLURl6",
+  "secret": "H3fpQ213VKjydALH"
+};
+
+const googleSpannerqa = {
+  "projectId": "pid-gouscnaiq-eaei-mims-01",
+  "instanceId": "gouscnaiq-eaei-mims-01",
+  "databaseId": "gouscnaiq-eaei-mims-db"
+}
+
+module.exports.testCaseInfo = function (obj, testData) {
+  addContext(obj, "Test Case ID :" + testData.TestCaseId);
+  addContext(obj, "Test Case Name :" + testData.TestCaseName);
+  //addContext(obj, "Test Call Method :"+testData.type);
+  addContext(obj, "--------------------STEPS --------------------")
+  addContext(obj, "Step 1. Hit Reporting API!!");
+};
+
+
+module.exports.VerifyStatusCode = function (obj, expectedStatusCode, actualStatusCode) {
+  var status = "PASSED"
+  var qTestObject = {
+    "Status_Code_Verification_Passed?": false
+  }
+
+  addContext(obj, "Step 2 - Verify Status Code");
+  addContext(obj, "Expected StatusCode : " + expectedStatusCode + " Actual StatusCode : " + actualStatusCode);
+
+  try {
+    expect(actualStatusCode).to.equal(expectedStatusCode);
+  }
+  catch (e) {
+    eventEmitter.emit("qTestObjectUpdate", qTestObject);
+    eventEmitter.emit("testCaseFailed")
+    expect(actualStatusCode).to.equal(expectedStatusCode);
+  }
+
+  addContext(obj, "Status Code Verification Passed");
+  status = "PASSED"
+  qTestObject["Status_Code_Verification_Passed?"] = true;
+  eventEmitter.emit("qTestObjectUpdate", qTestObject);
+  //console.log("Inside the function");
+};
+
+module.exports.VerifyErrorCode = function (obj, expectedErrorCode, actualErrorCode) {
+
+  addContext(obj, "Step 3. Verify error code");
+  addContext(obj, "Expected errorCode : " + expectedErrorCode + " Actual errorCode :" + actualErrorCode);
+  expect(actualErrorCode).to.equal(expectedErrorCode);
+  addContext(obj, "Status Code verification passed");
+};
+
+module.exports.VerifyResponseBody = function (obj, actualResponseBody, expectedResponseBody) {
+
+  var status = "PASSED"
+  var qTestObject = {
+    "Response_Body_Verification_Passed?": false,
+    "Expected_Response": expectedResponseBody,
+    "Actual_Response": actualResponseBody
+  }
+  addContext(obj, "Expected Response : " + JSON.stringify(JSON.parse(expectedResponseBody), null, 2));
+  addContext(obj, "Actual Response : " + JSON.stringify(actualResponseBody, null, 2));
+
+  addContext(obj, "step 3. Verify Response Body");
+  var comparision_result = Framework.is_Exact_Same(JSON.parse(expectedResponseBody), actualResponseBody);
+
+  //addContext(obj," Comparison Result : " + JSON.stringify(comparision_result))
+  addContext(obj, " Comparison Result-->> Is Success : " + comparision_result.isSuccess + " and Error Message : " + JSON.stringify(comparision_result.errorMessage, null, 2));
+  try {
+    expect(comparision_result.isSuccess).to.equal(true);
+  } catch (err) {
+    if (expectedResponseBody.includes("error_code")) {
+      let sMsg = JSON.stringify(comparision_result.errorMessage).split("Expected")[0];
+      console.log(sMsg);
+      sMsg = sMsg.substring(2, sMsg.length - 2)
+      throw new InvalidErrorResponse(sMsg)
+      
+    }
+    else
+      throw err
+  }
+
+  addContext(obj, "Verification of response Successfull!");
+  addContext(obj, 'Result: Test Case is PASSED');
+};
+
+module.exports.VerifyErrorResponse = function (obj, actualErrorResponse, expectedErrorResponse) {
+
+  addContext(obj, "Expected Response : " + expectedErrorResponse);
+  addContext(obj, "Actual Response : " + actualErrorResponse);
+
+  addContext(obj, "step 3. Verify Error Response");
+  expect(actualErrorResponse).to.equal(expectedErrorResponse);
+
+  addContext(obj, "Verification of Error Message Successfull!");
+  addContext(obj, 'Result: Test Case is PASSED');
+};
+
+module.exports.getAccessToken = function (object, body) {
+
+  var i = 0, authorization = "Sample";
+
+  var repository = global.accessTokens.tokens;
+  console.log(repository);
+  if (body != null) {
+    for (i = 0; i < repository.length; i++) {
+      if ((undefined != body.account_id) && (JSON.stringify(repository[i]).includes(body.account_id))) {
+        authorization = "Bearer " + repository[i].token;
+
+        break;
+      } else if ((undefined != body.account_name) && (JSON.stringify(repository[i]).includes(body.account_name))) {
+        authorization = "Bearer " + repository[i].token;
+        break;
+      } else if ((undefined != body.merchant_id) && (JSON.stringify(repository[i]).includes(body.merchant_id))) {
+        authorization = "Bearer " + repository[i].token;
+        break;
+      } else if ((undefined != body.merchant_name) && (JSON.stringify(repository[i]).includes(body.merchant_name)) && (repository[i].scope.merchant_name == body.merchant_name)) {
+        authorization = "Bearer " + repository[i].token;
+        break;
+      }
+    }
+  }
+  if (authorization == "Sample") {
+    authorization = "Bearer " + repository[0].token;
+    console.log(JSON.stringify(`here ${authorization}`));
+  }
+  console.log("getAccessToken");
+  console.log("authorization" + JSON.stringify(authorization));
+  var jsonValue = JSON.stringify(obj, null, 2);
+  console.log(jsonValue);
+  return authorization;
+
+}
+module.exports.getAccessTokenByTokenNumber = function (object, tokenNumber) {
+  console.log("getAccessTokenByTokenNumber" + JSON.stringify(global.accessTokensByTokenNumber));
+
+  var authorization = "Bearer " + global.accessTokensByTokenNumber.tokens[tokenNumber].token;
+
+  return authorization;
+}
+
+module.exports.getAccessTokenByTokenReference = function (tokenReference) {
+  let tokenNode = global.accessTokensByTokenNumber.tokens.filter(x => x.tokenNumber && x.tokenNumber == tokenReference)
+  if (tokenNode.length == 0) {
+    tokenNode = global.accessTokensByTokenNumber.tokens.filter(x => x.tokenReference && x.tokenReference.includes(tokenReference))
+  }
+  //still ZERO then return standalone merchant
+  if (tokenNode.length == 0) {
+    return this.getAccessTokenByTokenReference("standAloneMerchant")
+  }
+
+  global.tcMerchant = tokenNode[0]
+  var authorization = "Bearer " + tokenNode[0].tokenDetails.token;
+  // var authorization = "Bearer "+"sQPmnJrAT3nFsAVVNvEFt8tKXlGW";
+  console.log(authorization + "authorization----------------");
+  return authorization;
+}
+module.exports.getAccessTokenByTokenReferenceIdgen = function (tokenReferenceidGen) {
+  let tokenNode = global.accessTokensByTokenNumber.tokens.filter(x => x.tokenNumber && x.tokenNumber == tokenReferenceidGen)
+  if (tokenNode.length == 0) {
+    tokenNode = global.accessTokensByTokenNumber.tokens.filter(x => x.tokenReferenceidGen && x.tokenReferenceidGen.includes(tokenReferenceidGen))
+  }
+  //still ZERO then return standalone merchant
+  if (tokenNode.length == 0) {
+    return this.getAccessTokenByTokenReference("standAloneMerchant")
+  }
+
+  global.tcMerchant = tokenNode[0]
+  var authorization = "Bearer " + tokenNode[0].tokenDetails.token;
+  // var authorization = "Bearer "+"sQPmnJrAT3nFsAVVNvEFt8tKXlGW";
+  console.log(authorization + "authorization idgen ----------------");
+  return authorization;
+}
+module.exports.fetchActionsDB = function (object, actionId) {
+  var urlFetchActionDB = root_url_fetchActionDB + actionId;
+  var optionsFetchActionDB = { headers: header_fetchTran };
+  var response_FetchActionDB, count = 0;
+  console.log(urlFetchActionDB);
+  //Hitting the fetchDB endpoint
+  do {
+    response_FetchActionDB = Framework.hitWebService("GET", urlFetchActionDB, optionsFetchActionDB);
+    count++;
+  } while ((false == response_FetchActionDB.body.hasOwnProperty("downstream_message_received")) && (count < 3));
+  addContext(object, "Backend Request  : " + response_FetchActionDB.body.downstream_message_sent);
+  addContext(object, "Backend Response  : " + response_FetchActionDB.body.downstream_message_received);
+
+  console.log(`action.id here ${actionId}`);
+  return response_FetchActionDB.body;
+
+};
+
+module.exports.fetchScannerDB1 = async function (sql, id, project_id, instance_id, database_id) {
+
+  // const spannerDB = googleSpannerqa;
+
+  var projectId = project_id
+  var instanceId = instance_id
+  var databaseId = database_id
+  const spanner = new Spanner({ projectId: projectId });
+  // Gets a reference to a Cloud Spanner instance and database
+  const instance = spanner.instance(instanceId);
+  const database = instance.database(databaseId);
+  const query = {
+    sql: sql,
+    params: {
+      id: id
+    },
+
+  };
+
+  // The query to execute
+  try {
+    function sleep(milliseconds) {
+      const date = Date.now();
+      let currentDate = null;
+      do {
+        currentDate = Date.now();
+      } while (currentDate - date < milliseconds);
+    }
+    console.log("Delay start");
+    sleep(5000);
+    console.log("Delay end");
+    // Execute a simple SQL statement
+    const [rows] =  await database.run(query);
+    // console.log(`Query: ${rows} found.`);
+    // rows.forEach(row => 
+
+    //   console.log(row.toJSON()));
+    // console.log ("HERE:" + rows[0]);
+    return rows;
+
+  } catch (error) {
+    console.error('ERROR:', error);
+  }
+
+}
+module.exports.createMerchant = function (object) {
+  var urlCreateMerchant = root_url_Create_Merchant;
+  var optionsCreatemerch = { headers: createmerch };
+  var response_CreateNewmerch, count = 0;
+  console.log(urlFetchActionDB);
+  //Hitting the fetchDB endpoint
+  do {
+    response_CreateNewmerch = Framework.hitWebService("POST", urlCreateMerchant, optionsCreatemerch);
+    count++;
+  } while ((count <= 1500));
+  addContext(object, "New Merchant  : " + response_CreateNewmerch.body.action.id);
+  
+
+ // console.log(`action.id here ${actionId}`);
+  return response_CreateNewmerch.body;
+
+};
+
+
+module.exports.fetchScannerDB = async function (sql, ACT_ID) {
+
+  // const spannerDB = googleSpannerqa;
+
+  var projectId = "pid-gouscnaiq-eaei-mims-01"
+  var instanceId = "gouscnaiq-eaei-mims-01"
+  var databaseId = "gouscnaiq-eaei-mims-db"
+  const spanner = new Spanner({ projectId: projectId });
+
+  // Gets a reference to a Cloud Spanner instance and database
+  const instance = spanner.instance(instanceId);
+  const database = instance.database(databaseId);
+  const query = {
+    sql: sql,
+    params: {
+      ACT_ID: ACT_ID,
+    },
+
+  };
+
+  // The query to execute
+  try {
+    
+
+    // Execute a simple SQL statement
+    const [rows] = await database.run(query);
+    // console.log(`Query: ${rows} found.`);
+    rows.forEach(row => 
+      
+      console.log(row.toJSON()));
+      //console.log ("HERE:" + rows[0]);
+      return rows;
+
+  } catch (error) {
+    console.error('ERROR:', error);
+  }
+
+}
+module.exports.fetchScannerDB01 = async function (sql, MIMS_MID) {
+  // Gets a reference to a Cloud Spanner instance and database
+
+  var projectId = "pid-gouscnaiq-eaei-mims-01"
+  var instanceId = "gouscnaiq-eaei-mims-01"
+  var databaseId = "gouscnaiq-eaei-mims-db"
+  const spanner = new Spanner({ projectId: projectId });
+  let instance = spanner.instance(instanceId);
+  let database = instance.database(databaseId);
+
+  let iAttempt = 0;
+  let iWaitForSecondsBeforeAttempt = 10;
+  let dbRows = []
+
+
+  const query = {
+    sql: sql,
+    params: {
+
+      MIMS_MID: MIMS_MID,
+
+    },
+
+  };
+
+  console.log("Query => " + query)
+  try {
+    do {
+      dbRows = []
+      const [rows] = await database.run(query);
+      rows.forEach(row => {
+        const json = row.toJSON();
+        dbRows.push(json);
+      })
+      if (dbRows.length > 0) break;
+      var waitTill = new Date(new Date().getTime() + iWaitForSecondsBeforeAttempt * 2000);
+      while (waitTill > new Date()) { }
+      iAttempt++;
+
+    } while (iAttempt < 12); //try to retrive data every 10 sec till 2 min.
+
+  } catch (err) {
+    console.error('ERROR:', err);
+  } finally {
+    // Close the database when finished.
+    database.close();
+  }
+  return dbRows;
+}
+module.exports.getDataFromSpanner = async function (sql,ACT_ID) {
+  // Gets a reference to a Cloud Spanner instance and database
+  
+  var projectId = "pid-gouscnaiq-eaei-mims-01"
+  var instanceId = "gouscnaiq-eaei-mims-01"
+  var databaseId = "gouscnaiq-eaei-mims-db"
+  const spanner = new Spanner({ projectId: projectId });
+  let instance  = spanner.instance(instanceId);
+  let database = instance.database(databaseId);
+
+  let iAttempt = 0;
+  let iWaitForSecondsBeforeAttempt = 10;
+  let dbRows = []
+
+  
+    const query = {
+      sql: sql,
+      params: {
+        
+        ACT_ID:ACT_ID,
+            
+      },
+
+    };
+
+  console.log("Query => " + query)
+  try {
+      do {
+          dbRows = []
+          const [rows] = await database.run(query);
+          rows.forEach(row => {
+              const json = row.toJSON();
+              dbRows.push(json);
+          })
+          if(dbRows.length > 0) break;
+          var waitTill = new Date(new Date().getTime() + iWaitForSecondsBeforeAttempt * 2000);
+          while (waitTill > new Date()) { }
+          iAttempt++;
+  
+      } while (iAttempt < 12); //try to retrive data every 10 sec till 2 min.
+
+  } catch (err) {
+      console.error('ERROR:', err);
+  } finally {
+      // Close the database when finished.
+      database.close();
+  }
+  return dbRows;
+};
+
+
+
+module.exports.TransformResult = function (object, request_API, expected_output) {
+
+  //Replace abbrevation with full forms for card brand
+  if (request_API.payment_method.hasOwnProperty("digital_wallet")) {
+    expected_output.payment_method.digital_wallet.brand = expected_output.payment_method.digital_wallet.brand.replace("MC", "MASTERCARD").replace("DISC", "DISCOVER");
+    //Transformation on the cvv_result field
+    if (true == JSON.stringify(request_API.payment_method).includes("cvv")) {
+      var cvv_check = expected_output.payment_method.digital_wallet.cvv_result;
+      if (cvv_check == "M") {
+        expected_output.payment_method.digital_wallet.cvv_result = "MATCHED"
+      } else if (cvv_check == "N") {
+        expected_output.payment_method.digital_wallet.cvv_result = "NOT_MATCHED"
+      } else if (cvv_check == "P" || cvv_check == "S" || cvv_check == "U" || cvv_check == "I" || cvv_check == "0") {
+        expected_output.payment_method.digital_wallet.cvv_result = "NOT_CHECKED"
+      }
+    }
+  } else if (request_API.payment_method.hasOwnProperty("card")) {
+    expected_output.payment_method.card.brand = expected_output.payment_method.card.brand.replace("MC", "MASTERCARD").replace("DISC", "DISCOVER");
+    //Transformation on the cvv_result field
+    if (true == JSON.stringify(request_API.payment_method).includes("cvv")) {
+      var cvv_check = expected_output.payment_method.card.cvv_result;
+      if (cvv_check == "M") {
+        expected_output.payment_method.card.cvv_result = "MATCHED"
+      } else if (cvv_check == "N") {
+        expected_output.payment_method.card.cvv_result = "NOT_MATCHED"
+      } else if (cvv_check == "P" || cvv_check == "S" || cvv_check == "U" || cvv_check == "I" || cvv_check == "0") {
+        expected_output.payment_method.card.cvv_result = "NOT_CHECKED"
+      }
+    }
+  }
+
+  if (true == JSON.stringify(expected_output.payment_method).includes("authentication")) {
+    var cavv_check = expected_output.payment_method.authentication.cavv_result;
+    if (cavv_check == "0") {
+      cavv_check = "FAILED";
+    } else if (cavv_check == "1") {
+      cavv_check = "FAILED_AUTHENTICATION";
+    } else if (cavv_check == "2") {
+      cavv_check = "SUCCESS_AUTHENTICATION";
+    } else if (cavv_check == "3" || cavv_check == "8" || cavv_check == "A") {
+      cavv_check = "SUCCESS_ATTEMPT";
+    } else if (cavv_check == "4" || cavv_check == "7" || cavv_check == "9") {
+      cavv_check = "FAILED_ATTEMPT";
+    } else if (cavv_check == "5") {
+      cavv_check = ""
+    } else if (cavv_check == "6") {
+      cavv_check = "FAILED_NOT_VALIDATED"
+    } else if (cavv_check == "B") {
+      cavv_check = "INFO_SUCCESS"
+    } else if (cavv_check == "C" || cavv_check == "D" || cavv_check == "U") {
+      cavv_check = "NOT_VALIDATED"
+    }
+    expected_output.payment_method.authentication.cavv_result = cavv_check;
+  }
+
+  if (true == JSON.stringify(request_API.payment_method).includes("avs_")) {
+    var avsAddress, avsPostalCode;
+    if (true == JSON.stringify(request_API).includes("digital_wallet")) {
+      avsAddress = expected_output.payment_method.digital_wallet.avs_address_result;
+      avsPostalCode = expected_output.payment_method.digital_wallet.avs_postal_code_result;
+    } else {
+      avsAddress = expected_output.payment_method.card.avs_address_result;
+      avsPostalCode = expected_output.payment_method.card.avs_postal_code_result;
+    }
+
+    //Logic for Portico Gateway
+    if (avsAddress == "AVS Not Requested." || avsAddress == "AVS not supported or no data from issuer/auth system.") {
+      avsAddress = "NOT_CHECKED";
+      avsPostalCode = "NOT_CHECKED";
+    } else if (avsAddress == "Address matches, zip code does not.") {
+      avsAddress = "MATCHED";
+      avsPostalCode = "NOT_MATCHED";
+    } else if (avsAddress == "Neither address or zip code match.") {
+      avsAddress = "NOT_MATCHED";
+      avsPostalCode = "NOT_MATCHED";
+    } else if (avsAddress == "Retry - system unable to respond." || avsAddress == "AVS not supported." || avsAddress == "No data from Issuer/auth system.") {
+      avsAddress = "NOT_CHECKED";
+      avsPostalCode = "NOT_CHECKED";
+    } else if (avsAddress == "Zip matches, address does not match.") {
+      avsAddress = "NOT_MATCHED";
+      avsPostalCode = "MATCHED";
+    } else if (avsAddress == "Address and post code match (non-Mastercard)" || avsAddress == "Zip and address match." || avsAddress == "5 digit zip and address match." || avsAddress == "Street address and postal code matches." || avsAddress == "Street address and postal code match (international address)") {
+      avsAddress = "MATCHED";
+      avsPostalCode = "MATCHED";
+    } else if (avsAddress == "Address matches, postal code does or request does not include postal code (international address).") {
+      avsAddress = "MATCHED";
+      avsPostalCode = "NOT_MATCHED/NOT_CHECKED";
+    } else if ((avsAddress.includes("Address information not verified for international transaction.") == true) || avsAddress == "Address and postal code not verified due to incompatible formats (international address).") {
+      avsAddress = "NOT_CHECKED";
+      avsPostalCode = "NOT_CHECKED";
+    } else if (avsAddress == "Address match, postal code not verified due to incompatible formats (international address).") {
+      avsAddress = "MATCHED";
+      avsPostalCode = "NOT_CHECKED";
+    } else if (avsAddress == "Postal code match. Street address not verified due to incompatible formats(international address).") {
+      avsAddress = "NOT_CHECKED";
+      avsPostalCode = "MATCHED";
+    }
+
+    //Logic for ECOM gateway
+    if (avsAddress == "M") { avsAddress = "MATCHED"; }
+    if (avsAddress == "N") { avsAddress = "NOT_MATCHED"; }
+    if (avsAddress == "U" || avsAddress == "I" || avsAddress == "P") { avsAddress = "NOT_CHECKED"; }
+    if (avsPostalCode == "M") { avsPostalCode = "MATCHED"; }
+    if (avsPostalCode == "N") { avsPostalCode = "NOT_MATCHED"; }
+    if (avsPostalCode == "U" || avsPostalCode == "I" || avsPostalCode == "P") { avsPostalCode = "NOT_CHECKED"; }
+
+    if (true == JSON.stringify(request_API.payment_method).includes("digital_wallet")) {
+      expected_output.payment_method.digital_wallet.avs_address_result = avsAddress;
+      expected_output.payment_method.digital_wallet.avs_postal_code_result = avsPostalCode;
+    } else {
+      expected_output.payment_method.card.avs_address_result = avsAddress;;
+      expected_output.payment_method.card.avs_postal_code_result = avsPostalCode;
+    }
+  }
+  return expected_output;
+};
+
+
+module.exports.amountTransformer = function (expectedAmount, requestAmount) {
+
+  expectedAmount = expectedAmount.replace(".", "").replace("-", "");
+  //remove 0s that are present before the response amount. For eg: 0500 is converted to 500
+  while (expectedAmount.substring(0, 1) == "0") {
+    expectedAmount = expectedAmount.substring(1, expectedAmount.length);
+  }
+  //remove 0s from test data amount so that the lengths match
+  while (requestAmount.substring(0, 1) == "0") {
+    requestAmount = requestAmount.substring(1, requestAmount.length);
+  }
+  //append 0s after the amount, to match the format. Eg: 5.1 is displayed as 510
+  while (expectedAmount.length < requestAmount.length) {
+    expectedAmount = expectedAmount + "0"
+  }
+  return expectedAmount;
+};
+module.exports.isKeyPresentInResponse = function (obj, actualResponseBody, expected_key) {
+
+  addContext(obj, ">>>>>> Verify key  in response");
+  console.log("Expected key : " + expected_key);
+  console.log("actualResponseBody : " + actualResponseBody);
+  expect(actualResponseBody.hasOwnProperty(expected_key));
+  addContext(obj, "key is present in response verification passed");
+};
+
+//To Delete specific field from JSON body
+module.exports.findKeyAndReplaceValue = function (obj, key, newValue) {
+
+
+  function getObject(theObject) {
+    let result = null;
+    if (theObject instanceof Array) {
+      for (let i = 0; i < theObject.length; i++) {
+        getObject(theObject[i]);
+      }
+    } else {
+      for (let prop in theObject) {
+        if (theObject.hasOwnProperty(prop)) {
+          //
+          if (prop === key) {
+            theObject[prop] = newValue;
+          }
+          if (theObject[prop] instanceof Object || theObject[prop] instanceof Array) {
+            getObject(theObject[prop]);
+
+          }
+        }
+      }
+    }
+  }
+  
+  getObject(obj);
+ 
+  console.log("findKeyAndReplaceValue");
+  var jsonValue = JSON.stringify(obj, null, 2);
+  console.log(jsonValue);
+  return obj;
+  
+}
+//To Delete specific field from JSON body
+module.exports.findAndRemoveKey = function (obj, key) {
+
+
+  function getObject(theObject) {
+    let result = null;
+    if (theObject instanceof Array) {
+      for (let i = 0; i < theObject.length; i++) {
+        getObject(theObject[i]);
+      }
+    } else {
+      for (let prop in theObject) {
+        if (theObject.hasOwnProperty(prop)) {
+          //
+          if (prop === key) {
+            delete theObject[prop];
+          }
+          if (theObject[prop] instanceof Object || theObject[prop] instanceof Array) {
+            getObject(theObject[prop]);
+          }
+        }
+      }
+    }
+  }
+  getObject(obj);
+  console.log("findAndRemoveKey");
+  var jsonValue = JSON.stringify(obj, null, 2);
+  console.log(jsonValue);
+  return obj;
+}
+
+module.exports.VerifyPermissions = function (obj, actualPermissions, requestPermissions) {
+  var comparision_result = Framework.is_Exact_Same(JSON.parse(requestPermissions), actualPermissions);
+  addContext(obj, " Comparison Result : " + JSON.stringify(comparision_result))
+  expect(comparision_result.isSuccess).to.equal(true);
+  addContext(obj, "Permissions Matched!");
+  addContext(obj, "Test Case Passed!");
+};
+
+module.exports.utcDateConversion = function (object, createdate) {
+  createdate = createdate.toString();
+  year = createdate.substr(0, 4);
+  month = createdate.substring(4, 6);
+  day = createdate.substring(6, 8);
+  hour = createdate.substring(8, 10);
+  minute = createdate.substring(10, 12);
+  second = createdate.substring(12);
+  function dateToUTC(year, month, day, hour, minute, second) {
+    return (((new Date(Date.UTC(year, month - 1, day, hour - 1, minute, second))).getTime()));
+  }
+  createdate = new Date(dateToUTC(year, month, day, hour, minute, second)).toISOString();
+  return createdate;
+}
+
+//To Add/update fields from JSON body
+module.exports.updateJSONfield = function (request_body, json_key, json_value) {
+  for (var i = 0; i < json_key.length; i++) {
+    //splitting the keys for nested JSON and get to root key
+    if (json_key[i].includes("[")) {
+      arr = json_key[i].replace(/\[/g, ".").replace(/\]/g, "").split(".");
+      var temp = request_body
+      for (var j = 0; j < arr.length - 1; j++) {
+        temp = temp[arr[j]]
+      }
+      temp[arr[j]] = json_value[i]
+    }
+    else if (json_key[i].includes(".")) {
+      arr = json_key[i].split(".")
+      var temp = request_body
+      for (var j = 0; j < arr.length - 1; j++) {
+        temp = temp[arr[j]]
+      }
+      // Assign given value to specified root key
+      temp[arr[j]] = json_value[i]
+    }
+    else {
+      // Assign given value to specified key
+      var field_name = json_key[i]
+      request_body[field_name] = json_value[i]
+
+    }
+    console.log("here !! " + JSON.stringify(request_body, null, 2));
+  }
+
+  return request_body
+}
+
+//To Delete specific field from JSON body
+module.exports.deleteJSONfield = function (request_body, json_remove_key) {
+  for (var i = 0; i < json_remove_key.length; i++) {
+    //splitting the keys for nested JSON and get to root key
+    if (json_remove_key[i].includes("[")) {
+      arr = json_remove_key[i].replace(/\[/g, ".").replace(/\]/g, "").split(".");
+      var temp = request_body
+      for (var j = 0; j < arr.length - 1; j++) {
+        temp = temp[arr[j]]
+      }
+      delete temp[arr[j]]
+    }
+    else if (json_remove_key[i].includes(".")) {
+      arr = json_remove_key[i].split(".")
+      var temp = request_body
+      for (var j = 0; j < arr.length - 1; j++) {
+        temp = temp[arr[j]]
+      }
+      // delete the specified root key
+      delete temp[arr[j]]
+    }
+    else {
+      //delete the specified key
+      json_remove_key.forEach(elm => delete request_body[elm])
+    }
+  }
+  return request_body
+}
+
+module.exports.TransITDateConversion = function (object, createdate) {
+  createdate = createdate.toString();
+  year = createdate.substr(0, 4);
+  month = createdate.substring(5, 7);
+  day = createdate.substring(8, 10);
+  hour = createdate.substring(11, 13);
+  minute = createdate.substring(14, 16);
+  second = createdate.substring(17);
+  function dateToUTC(year, month, day, hour, minute, second) {
+    return (((new Date(Date.UTC(year, parseInt(month) - 1, day, parseInt(hour) + 7, minute, second)))));
+  }
+  createdate = dateToUTC(year, month, day, hour, minute, second);
+  createdate = new Date(createdate);
+  return createdate.toISOString();
+}
+
+module.exports.getReferenceNumber = function () {
+  return "TRANS-" + new Date().toISOString().replace(/['T',:,-]/g, '').split('.').join('') + Math.random(8).toString(16).substring(5);
+}
+
+//helps to generate 6 digit reference id
+module.exports.getReferenceNumber_withSixDigits = function () {
+  return Math.round((Math.random() * Math.abs(999999 - 100000)) + 100000);
+}
+
+//helps to generate 4 digit random number
+module.exports.getUniqueName = function () {
+  return Math.round((Math.random() * Math.abs(9999 - 1000)) + 1000);
+}
+
+//This module fetch the Get Single Action ID Status Response using action id from Get Action Status call
+module.exports.fetchActionsStatus = function (object, actionId, rootHeader_actionStatus, root_url_actionStatus) {
+  var urlfetchActionsStatus = root_url_actionStatus + actionId;
+  var optionsFetchActionStatus = { headers: rootHeader_actionStatus };
+  var response_FetchActionStatus, count = 0;
+
+  addContext(object, "Method Type as : GET and Action Id STatus URL : " + JSON.stringify(urlfetchActionsStatus));
+  //Hitting the fetchActionIdDB endpoint
+  do {
+    response_FetchActionStatus = Framework.hitWebService("GET", urlfetchActionsStatus, optionsFetchActionStatus);
+    count++;
+  } while ((false == response_FetchActionStatus.body.hasOwnProperty("status_description")) && (count < 3));
+  
+  console.log(`action.id here ${actionId}`);
+  return response_FetchActionStatus.body;
+
+};
+
+module.exports.compareField = async function(object, sFieldName, actual, expected){
+  
+  let sMsg = `${sFieldName} Actual = ${actual}, Expected = ${expected}`
+  addContext(object, sMsg);
+  expect(actual).to.equal(expected, `${sFieldName} value is not matching`);
+
+};
+
+module.exports. validateErrorMessage = function (object, testData, verb, url, headers, body) {
+
+  object._runnable.title = testData.TestCaseName;
+  var jsonAssertion = new softAssert();
+
+
+  for (let iScenario = 0; iScenario < testData.input_scenarios.inputValue.length; iScenario++) {
+    let request_body = JSON.parse(JSON.stringify(body));
+    let header = JSON.parse(JSON.stringify(headers));
+
+    let iterationToBePerfored = testData.input_scenarios.inputValue[iScenario];
+    let message = iterationToBePerfored.message;
+    let scenario = iterationToBePerfored.scenario;
+
+    if(request_body.hasOwnProperty("name")){
+      request_body.name= "ISO_HIRName_" + this.getReferenceNumber_withSixDigits();
+    }
+    if(request_body.hasOwnProperty("reference") && (verb === "POST")){
+      request_body.reference= this.getReferenceNumber_withSixDigits();
+    }
+    if(request_body.hasOwnProperty("name") && (request_body.type === "PARTNER")){
+      request_body.name= "Partner_QA" + this.getReferenceNumber_withSixDigits();
+    }
+    if(request_body.hasOwnProperty("name") && (testData.test_platformName != null)){
+      request_body.name = "Partner-Qa/./././././././././././././././././././././././././././././././././. " + Math.floor((Math.random() * Math.abs(9999999 - 1000000)) + 100000);
+    }
+
+    request_body = this.updateJSONfield(request_body, iterationToBePerfored.json_key, iterationToBePerfored.json_value);
+    request_body = this.deleteJSONfield(request_body, iterationToBePerfored.json_remove_key);
+
+    
+
+    let scenarioNumber = iScenario + 1;
+    let sMessageKey = iterationToBePerfored.json_key.length > 0 ? iterationToBePerfored.json_key : iterationToBePerfored.json_remove_key
+    addContext(object, ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> ");
+    addContext(object, ">>>>>> Scenario " + scenarioNumber + ": " + scenario + " field Name = " + JSON.stringify(sMessageKey) + " Value = " + JSON.stringify(iterationToBePerfored.json_value));
+    let sTestLogErrorMessage = ">>>>>> Scenario: " + scenario + " field Name = " + JSON.stringify(sMessageKey) + " Value = " + JSON.stringify(iterationToBePerfored.json_value);
+
+    var options = {
+      headers: header
+
+    }
+    if (verb === "POST" || verb === "PATCH") {
+      options.body = JSON.stringify(request_body)
+    }
+    addContext(object, "Method Type as : " + verb +" and URL : " + url);
+    addContext(object, "header : " + JSON.stringify(header));
+    addContext(object, "request_body : " + JSON.stringify(request_body, null, 2));
+
+    response = Framework.hitWebService(verb, url, options);
+    addContext(object, "Actual Response : " + JSON.stringify(response, null, 2));
+
+    statusCode = iterationToBePerfored.statusCode || testData.statusCode
+    jsonAssertion.softAssert(response.statusCode, statusCode, "Status Code Mismatch");
+
+    addContext(object, ">>>>>> Expected Error Message " + JSON.stringify(message, null, 2));
+
+    if (equal(response.body, message) == false) {
+      addContext(object, "******** Iteration Failed ********");
+      addContext(object, "******** Actual Error Message " + JSON.stringify(response.body, null, 2));
+
+    }
+
+    jsonAssertion.softAssert(response.body, message, sTestLogErrorMessage);
+
+  }
+
+  jsonAssertion.softAssertAll();
+};
